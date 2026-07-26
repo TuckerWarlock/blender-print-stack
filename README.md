@@ -9,8 +9,6 @@ ra100's eight `blender-skills:*` reference skills) rather than replacing it.
 ## Install
 
 ```bash
-chmod +x install.sh
-
 ./install.sh
 ```
 
@@ -95,6 +93,16 @@ ahujasid server and have no official equivalent — nothing here depends on them
 
 Re-apply this renaming after pulling any upstream update. Each vendored skill
 carries a `VENDORED.md` recording what was changed.
+
+## Two gotchas found in testing
+
+**No cross-call namespace.** `execute_blender_code` gives each call a fresh
+global scope. Prefix every call with an `exec(open(...).read())` of the helper
+module — see the loading section in each skill.
+
+**Scale before repair.** `voxel_mm` is absolute. Remeshing a mesh that is still
+at arbitrary import scale destroys it while still reporting `watertight: True`.
+Check the face count after `repair()`.
 
 ## Not tested
 

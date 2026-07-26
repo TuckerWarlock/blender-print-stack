@@ -10,8 +10,14 @@ Consolidates the assembly rules from `ProfRino/Blender-MCP-Assembly-Skill` with
 the validation gate from `Mik1703/blender-mcp-quality`, retargeted to the
 official Blender Lab MCP server (`execute_blender_code`, `get_objects_summary`).
 
-Helpers live in `scripts/assembly_helpers.py`. Send that through
-`execute_blender_code` once, then call the functions.
+Helpers live in `scripts/assembly_helpers.py`. `execute_blender_code` does not
+retain a Python namespace between calls, so prefix every call that uses them:
+
+```python
+import os
+exec(open(os.path.expanduser(
+    "~/.claude/skills/blender-build-discipline/scripts/assembly_helpers.py")).read())
+```
 
 **Scope note:** this is for models assembled from primitives. Organic subjects
 (faces, masks, creatures) cannot be built this way — route those to

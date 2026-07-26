@@ -10,11 +10,16 @@ Call order that actually works:
     setup_mm_units()
     o = import_mesh("/path/mask.glb")
     diagnose(o)                       # see what's broken
-    o = repair(o, voxel_mm=0.8)       # remesh to a watertight manifold
     scale_to_mm(o, height_mm=240)     # real-world size FIRST
+    o = repair(o, voxel_mm=0.8)       # remesh to a watertight manifold
     o = shell(o, thickness_mm=2.5)    # hollow, e.g. for a wearable
     diagnose(o)                       # must be clean before export
     export_stl(o, "/path/mask.stl")   # or export however you like
+
+If the mesh is still a bare open shell (no back, no thickness yet — built
+directly as a face surface, not imported as a volume), swap the last two:
+shell() before repair(), or repair() will reconstruct only a small fragment
+and discard the rest. See repair()'s docstring.
 """
 
 import bmesh
@@ -88,6 +93,23 @@ def clear_parents_and_apply(obj):
     bpy.context.view_layer.update()
 
 
+def _world_bbox_dims(obj):
+    """True world-space bounding box (x, y, z) size.
+
+    obj.dimensions is a local-space measurement scaled by obj.scale — it does
+    NOT rotate into world space. Any object whose rotation hasn't been baked
+    down (i.e. didn't go through import_mesh()/clear_parents_and_apply, or was
+    already sitting in the scene at an angle) will silently report the wrong
+    axis as "height"/"width"/"depth". This walks actual vertex world
+    coordinates instead, so it's correct regardless of rotation state.
+    """
+    coords = [obj.matrix_world @ v.co for v in obj.data.vertices]
+    xs = [c.x for c in coords]
+    ys = [c.y for c in coords]
+    zs = [c.z for c in coords]
+    return (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
+
+
 # --------------------------------------------------------------------------
 # Diagnosis. These are the checks a slicer silently fails on.
 # --------------------------------------------------------------------------
@@ -113,7 +135,7 @@ def diagnose(obj, verbose=True):
     overlaps = tree.overlap(tree)
     tmp.free()
 
-    d = obj.dimensions
+    d = _world_bbox_dims(obj)
     report = {
         "faces": len(bm.faces),
         "tris": sum(len(f.verts) - 2 for f in bm.faces),
@@ -125,7 +147,7 @@ def diagnose(obj, verbose=True):
         "self_intersections": len(overlaps),
         "signed_volume_mm3": round(volume, 2),
         "normals_inverted": volume < 0,
-        "dims_mm": (round(d.x, 2), round(d.y, 2), round(d.z, 2)),
+        "dims_mm": (round(d[0], 2), round(d[1], 2), round(d[2], 2)),
         "min_z_mm": round(min((obj.matrix_world @ v.co).z for v in bm.verts), 2),
     }
     bm.free()
@@ -153,7 +175,16 @@ def diagnose(obj, verbose=True):
 # voxel_mm relative to the smallest feature you care about (roughly half of it).
 # --------------------------------------------------------------------------
 def repair(obj, voxel_mm=0.8, merge_mm=0.01):
+    """Voxel Remesh needs input that already approximates a CLOSED volume to
+    determine inside-vs-outside. Fed a wide-open single-surface shell (no
+    back, no thickness yet — e.g. a face/mask surface before shell() has run),
+    it doesn't degrade gracefully: it can silently reconstruct one small
+    fragment where the surface happens to fold enough to look locally
+    enclosed, and discard everything else. If your mesh is still an open
+    shell rather than a closed-but-leaky scan/generator blob, run shell()
+    BEFORE repair(), not after."""
     bpy.context.view_layer.objects.active = obj
+    faces_before = len(obj.data.polygons)
 
     bm = bmesh.new()
     bm.from_mesh(obj.data)
@@ -171,7 +202,19 @@ def repair(obj, voxel_mm=0.8, merge_mm=0.01):
     bpy.ops.object.modifier_apply(modifier=m.name)
     bpy.context.view_layer.update()
 
-    print(f"repaired at {voxel_mm}mm voxel -> {len(obj.data.polygons):,} faces")
+    faces_after = len(obj.data.polygons)
+    print(f"repaired at {voxel_mm}mm voxel -> {faces_after:,} faces")
+
+    if faces_before > 0 and faces_after < faces_before * 0.5:
+        print(
+            f"  WARNING: face count collapsed {faces_before:,} -> {faces_after:,} "
+            f"({100 * (faces_after - faces_before) / faces_before:.1f}%). This usually "
+            "means the input wasn't an approximately closed volume — Voxel Remesh "
+            "reconstructed only a small enclosed fragment and discarded the rest. "
+            "If this object is a bare open shell (no back/thickness), run shell() "
+            "first, then repair() again on the result."
+        )
+
     return obj
 
 
@@ -195,14 +238,19 @@ def decimate(obj, target_faces=200_000):
 # --------------------------------------------------------------------------
 def scale_to_mm(obj, height_mm=None, width_mm=None, depth_mm=None):
     """Uniformly scale so one named axis matches a real measurement.
-    Z = height, X = width, Y = depth. Adult face height is ~200-240mm."""
-    d = obj.dimensions
+    Z = height, X = width, Y = depth. Adult face height is ~200-240mm.
+
+    Measures against the true world-space bounding box, not obj.dimensions —
+    obj.dimensions is local-space and silently targets the wrong axis if the
+    object's rotation hasn't been baked down (e.g. it never went through
+    import_mesh(), or was already sitting in the scene at an angle)."""
+    d = _world_bbox_dims(obj)
     if height_mm:
-        factor = height_mm / d.z
+        factor = height_mm / d[2]
     elif width_mm:
-        factor = width_mm / d.x
+        factor = width_mm / d[0]
     elif depth_mm:
-        factor = depth_mm / d.y
+        factor = depth_mm / d[1]
     else:
         raise ValueError("give one of height_mm / width_mm / depth_mm")
 
@@ -210,7 +258,7 @@ def scale_to_mm(obj, height_mm=None, width_mm=None, depth_mm=None):
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
     bpy.context.view_layer.update()
-    print(f"scaled x{factor:.4f} -> {tuple(round(v, 1) for v in obj.dimensions)} mm")
+    print(f"scaled x{factor:.4f} -> {tuple(round(v, 1) for v in _world_bbox_dims(obj))} mm (world)")
     return obj
 
 
@@ -231,17 +279,23 @@ def drop_to_bed(obj):
 def shell(obj, thickness_mm=2.5, open_back=True):
     """Turn a solid into a wearable shell.
 
-    open_back removes faces whose normal points away from the viewer (+Y here),
-    leaving an open cavity; Solidify then gives the remaining surface real
-    thickness. 2.5mm is a sane minimum for a PLA/PETG wearable; go 3mm+ if it
-    takes strap load. For resin, add drain holes afterwards or it will cup.
+    open_back removes faces whose normal points away from the viewer (+Y in
+    world space), leaving an open cavity; Solidify then gives the remaining
+    surface real thickness. 2.5mm is a sane minimum for a PLA/PETG wearable;
+    go 3mm+ if it takes strap load. For resin, add drain holes afterwards or
+    it will cup.
     """
     bpy.context.view_layer.objects.active = obj
 
     if open_back:
         bm = bmesh.new()
         bm.from_mesh(obj.data)
-        back = [f for f in bm.faces if f.normal.y > 0.35]
+        # World-space normal: bm.from_mesh gives LOCAL normals, which silently
+        # open the wrong side if the object's rotation hasn't been baked down
+        # (same class of bug _world_bbox_dims fixes for measurements). Assumes
+        # scale is already applied/uniform, true once scale_to_mm() has run.
+        normal_mat = obj.matrix_world.to_3x3()
+        back = [f for f in bm.faces if (normal_mat @ f.normal).y > 0.35]
         if back:
             bmesh.ops.delete(bm, geom=back, context="FACES")
             print(f"opened back: removed {len(back):,} faces")
