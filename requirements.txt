@@ -1,0 +1,7 @@
+# Reference-comparison skills (orthographic-registration, multiview-fit-loop,
+# reference-analysis-validator, landmark-fit-repair, reference-to-3d,
+# contour-to-mesh)
+opencv-python>=4.9
+numpy>=1.26
+scipy>=1.11
+Pillow>=10.0
