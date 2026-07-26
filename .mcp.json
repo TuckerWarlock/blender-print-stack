@@ -4,7 +4,7 @@
 			"command": "uv",
 			"args": [
 				"--directory",
-				"~/Code/blender_mcp/mcp",
+				"/Users/warl0ck/Code/blender_mcp/mcp",
 				"run",
 				"blender-mcp"
 			]
