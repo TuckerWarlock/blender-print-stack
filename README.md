@@ -9,6 +9,8 @@ ra100's eight `blender-skills:*` reference skills) rather than replacing it.
 ## Install
 
 ```bash
+chmod +x install.sh
+
 ./install.sh
 ```
 
